@@ -1,5 +1,5 @@
 /*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2005 EQEMu Development Team (http://eqemulator.net)
+	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -15,6 +15,7 @@
 	along with this program; if not, write to the Free Software
 	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
 */
+
 #include "../common/global_define.h"
 #include "clientlist.h"
 #include "zoneserver.h"
@@ -28,6 +29,7 @@
 #include "../common/classes.h"
 #include "../common/packet_dump.h"
 #include "wguild_mgr.h"
+#include "../common/misc.h"
 
 #include <set>
 
@@ -141,7 +143,6 @@ void ClientList::EnforceSessionLimit(uint32 iLSAccountID) {
 //Check current CLE Entry IPs against incoming connection
 
 void ClientList::GetCLEIP(uint32 iIP) {
-
 	ClientListEntry* countCLEIPs = 0;
 	LinkedListIterator<ClientListEntry*> iterator(clientlist);
 
@@ -149,64 +150,62 @@ void ClientList::GetCLEIP(uint32 iIP) {
 	iterator.Reset();
 
 	while(iterator.MoreElements()) {
-
-		countCLEIPs = iterator.GetData();
-
-		// If the IP matches, and the connection admin status is below the exempt status,
-		// or exempt status is less than 0 (no-one is exempt)
-		if ((countCLEIPs->GetIP() == iIP) &&
-			((countCLEIPs->Admin() < (RuleI(World, ExemptMaxClientsStatus))) ||
-			(RuleI(World, ExemptMaxClientsStatus) < 0))) {
-
-			// Increment the occurences of this IP address
-			IPInstances++;
-
-			// If the number of connections exceeds the lower limit
-			if (IPInstances > (RuleI(World, MaxClientsPerIP))) {
-
-				// If MaxClientsSetByStatus is set to True, override other IP Limit Rules
-				if (RuleB(World, MaxClientsSetByStatus)) {
-
-					// The IP Limit is set by the status of the account if status > MaxClientsPerIP
-					if (IPInstances > countCLEIPs->Admin()) {
-
-						if(RuleB(World, IPLimitDisconnectAll)) {
+		countCLEIPs = iterator.GetData();		
+		if ((countCLEIPs->GetIP() == iIP) && ((countCLEIPs->Admin() < (RuleI(World, ExemptMaxClientsStatus))) || (RuleI(World, ExemptMaxClientsStatus) < 0))) { // If the IP matches, and the connection admin status is below the exempt status, or exempt status is less than 0 (no-one is exempt)
+			IPInstances++; // Increment the occurences of this IP address
+			Log.Out(Logs::General, Logs::Client_Login, "Account ID: %i Account Name: %s IP: %s.", countCLEIPs->LSID(), countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str());
+			if (RuleB(World, EnableIPExemptions)) {
+				Log.Out(Logs::General, Logs::Client_Login, "Account ID: %i Account Name: %s IP: %s IP Instances: %i Max IP Instances: %i", countCLEIPs->LSID(), countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str(), IPInstances, database.GetIPExemption(long2ip(countCLEIPs->GetIP()).c_str()));
+				if (IPInstances > database.GetIPExemption(long2ip(countCLEIPs->GetIP()).c_str())) {
+					if(RuleB(World, IPLimitDisconnectAll)) {
+						Log.Out(Logs::General, Logs::Client_Login, "Disconnect: All accounts on IP %s", long2ip(countCLEIPs->GetIP()).c_str());
+						DisconnectByIP(iIP);
+						return;
+					} else {
+						Log.Out(Logs::General, Logs::Client_Login, "Disconnect: Account %s on IP %s.", countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str());
+						countCLEIPs->SetOnline(CLE_Status_Offline);
+						iterator.RemoveCurrent();
+						continue;
+					}
+				}
+			} else {
+				if (IPInstances > (RuleI(World, MaxClientsPerIP))) { // If the number of connections exceeds the lower limit
+					if (RuleB(World, MaxClientsSetByStatus)) { // If MaxClientsSetByStatus is set to True, override other IP Limit Rules
+						Log.Out(Logs::General, Logs::Client_Login, "Account ID: %i Account Name: %s IP: %s IP Instances: %i Max IP Instances: %i", countCLEIPs->LSID(), countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str(), IPInstances, countCLEIPs->Admin());
+						if (IPInstances > countCLEIPs->Admin()) { // The IP Limit is set by the status of the account if status > MaxClientsPerIP	
+							if(RuleB(World, IPLimitDisconnectAll)) {
+								Log.Out(Logs::General, Logs::Client_Login, "Disconnect: All accounts on IP %s", long2ip(countCLEIPs->GetIP()).c_str());
+								DisconnectByIP(iIP);
+								return;
+							} else {
+								Log.Out(Logs::General, Logs::Client_Login, "Disconnect: Account %s on IP %s.", countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str());
+								countCLEIPs->SetOnline(CLE_Status_Offline); // Remove the connection
+								iterator.RemoveCurrent();
+								continue;
+							}
+						}
+					} else if ((countCLEIPs->Admin() < RuleI(World, AddMaxClientsStatus)) || (RuleI(World, AddMaxClientsStatus) < 0)) { // Else if the Admin status of the connection is not eligible for the higher limit, or there is no higher limit (AddMaxClientStatus < 0)
+						if(RuleB(World, IPLimitDisconnectAll)) {								
+							Log.Out(Logs::General, Logs::Client_Login, "Disconnect: All accounts on IP %s", long2ip(countCLEIPs->GetIP()).c_str());
 							DisconnectByIP(iIP);
 							return;
 						} else {
-							// Remove the connection
-							countCLEIPs->SetOnline(CLE_Status_Offline);
+							Log.Out(Logs::General, Logs::Client_Login, "Disconnect: Account %s on IP %s.", countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str());
+							countCLEIPs->SetOnline(CLE_Status_Offline); // Remove the connection
 							iterator.RemoveCurrent();
 							continue;
 						}
-					}
-				}
-				// Else if the Admin status of the connection is not eligible for the higher limit,
-				// or there is no higher limit (AddMaxClientStatus<0)
-				else if ((countCLEIPs->Admin() < (RuleI(World, AddMaxClientsStatus)) ||
-						(RuleI(World, AddMaxClientsStatus) < 0))) {
-
-					if(RuleB(World, IPLimitDisconnectAll)) {
-						DisconnectByIP(iIP);
-						return;
-					} else {
-						// Remove the connection
-						countCLEIPs->SetOnline(CLE_Status_Offline);
-						iterator.RemoveCurrent();
-						continue;
-					}
-				}
-				// else they are eligible for the higher limit, but if they exceed that
-				else if (IPInstances > RuleI(World, AddMaxClientsPerIP)) {
-
-					if(RuleB(World, IPLimitDisconnectAll)) {
-						DisconnectByIP(iIP);
-						return;
-					} else {
-						// Remove the connection
-						countCLEIPs->SetOnline(CLE_Status_Offline);
-						iterator.RemoveCurrent();
-						continue;
+					} else if (IPInstances > RuleI(World, AddMaxClientsPerIP)) { // else they are eligible for the higher limit, but if they exceed that	
+						if(RuleB(World, IPLimitDisconnectAll)) {
+							Log.Out(Logs::General, Logs::Client_Login, "Disconnect: All accounts on IP %s", long2ip(countCLEIPs->GetIP()).c_str());
+							DisconnectByIP(iIP);
+							return;
+						} else {
+							Log.Out(Logs::General, Logs::Client_Login, "Disconnect: Account %s on IP %s.", countCLEIPs->LSName(), long2ip(countCLEIPs->GetIP()).c_str());
+							countCLEIPs->SetOnline(CLE_Status_Offline); // Remove the connection
+							iterator.RemoveCurrent();
+							continue;
+						}
 					}
 				}
 			}
@@ -748,7 +747,7 @@ void ClientList::SendWhoAll(uint32 fromid,const char* to, int16 admin, Who_All_S
 	//zoneserver_list.SendPacket(pack2); // NO NO NO WHY WOULD YOU SEND IT TO EVERY ZONE SERVER?!?
 	SendPacket(to,pack2);
 	safe_delete(pack2);
-	safe_delete(output);
+	safe_delete_array(output);
 	}
 	catch(...){
 		Log.Out(Logs::Detail, Logs::World_Server,"Unknown error in world's SendWhoAll (probably mem error), ignoring...");
@@ -1064,7 +1063,7 @@ void ClientList::ConsoleSendWhoAll(const char* to, int16 admin, Who_All_Struct* 
 
 			if (cle->Anon() == 2) { // Roleplay
 				if (admin >= 100 && admin >= cle->Admin())
-					sprintf(line, "  %s[RolePlay %i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetEQClassName(cle->class_(),cle->level()), cle->name(), GetRaceName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
+					sprintf(line, "  %s[RolePlay %i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetClassIDName(cle->class_(),cle->level()), cle->name(), GetRaceIDName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
 				else if (cle->Admin() >= 80 && admin < 80 && cle->GetGM()) {
 					iterator.Advance();
 					continue;
@@ -1074,7 +1073,7 @@ void ClientList::ConsoleSendWhoAll(const char* to, int16 admin, Who_All_Struct* 
 			}
 			else if (cle->Anon() == 1) { // Anon
 				if (admin >= 100 && admin >= cle->Admin())
-					sprintf(line, "  %s[ANON %i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetEQClassName(cle->class_(),cle->level()), cle->name(), GetRaceName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
+					sprintf(line, "  %s[ANON %i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetClassIDName(cle->class_(),cle->level()), cle->name(), GetRaceIDName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
 				else if (cle->Admin() >= 80 && cle->GetGM()) {
 					iterator.Advance();
 					continue;
@@ -1083,7 +1082,7 @@ void ClientList::ConsoleSendWhoAll(const char* to, int16 admin, Who_All_Struct* 
 					sprintf(line, "  %s[ANONYMOUS] %s%s%s", tmpgm, cle->name(), LFG, accinfo);
 			}
 			else
-				sprintf(line, "  %s[%i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetEQClassName(cle->class_(),cle->level()), cle->name(), GetRaceName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
+				sprintf(line, "  %s[%i %s] %s (%s)%s zone: %s%s%s", tmpgm, cle->level(), GetClassIDName(cle->class_(),cle->level()), cle->name(), GetRaceIDName(cle->race()), tmpguild, tmpZone, LFG, accinfo);
 
 			AppendAnyLenString(&output, &outsize, &outlen, line);
 			if (outlen >= 3584) {
@@ -1183,7 +1182,7 @@ void ClientList::ZoneBootup(ZoneServer* zs) {
 				iterator.GetData()->EnterWorld(false);
 			}
 			else if (iterator.GetData()->WaitingForBootup() == zs->GetID()) {
-				iterator.GetData()->ZoneUnavail();
+				iterator.GetData()->TellClientZoneUnavailable();
 			}
 		}
 		iterator.Advance();

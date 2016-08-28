@@ -69,7 +69,7 @@ IT10714_ACTORDEF=Augmentation Sealer
 IT10725_ACTORDEF=Shuriken
 */
 
-#define OT_DROPPEDITEM BagTypeLargeBag
+#define OT_DROPPEDITEM EQEmu::item::BagTypeLargeBag
 
 // Icon values:
 //0x0453 a pie
@@ -108,7 +108,7 @@ public:
 	static void HandleAugmentation(Client* user, const AugmentItem_Struct* in_augment, Object *worldo);
 	static void HandleAutoCombine(Client* user, const RecipeAutoCombine_Struct* rac);
 
-	static SkillUseTypes TypeToSkill(uint32 type);
+	static EQEmu::skills::SkillType TypeToSkill(uint32 type);
 
 	// Packet functions
 	void CreateSpawnPacket(EQApplicationPacket* app);
@@ -154,12 +154,18 @@ public:
 	void SetX(float pos);
 	void SetY(float pos);
 	void SetZ(float pos);
+	void SetTiltX(float pos);
+	void SetTiltY(float pos);
+	float GetTiltX();
+	float GetTiltY();
 	void SetModelName(const char* modelname);
 	const char* GetModelName();
-	uint16 GetSize();
-	void SetSize(uint16 size);
+	float GetSize();
+	void SetSize(float size);
 	uint16 GetSolidType();
 	void SetSolidType(uint16 size);
+	void SetDisplayName(const char *in_name);
+	const char *GetDisplayName() const { return m_display_name; }
 
 	const char* GetEntityVariable(const char *id);
 	void SetEntityVariable(const char *id, const char *m_var);
@@ -182,6 +188,7 @@ protected:
 	float			m_z;
 	float			m_heading;
 	bool			m_ground_spawn;
+	char			m_display_name[64];
 
 	std::map<std::string, std::string> o_EntityVariables;
 

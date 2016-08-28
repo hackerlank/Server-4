@@ -1,5 +1,163 @@
 EQEMu Changelog (Started on Sept 24, 2003 15:50)
 -------------------------------------------------------
+== 08/27/2016 ==
+Kinglykrab: Added optional IP-based account exemptions.
+	- To use this system simply set World:EnableIPExemptions to true and create an entry in the ip_exemptions table.
+	- Example: exemption_ip of IP 192.168.1.4 in ip_exemptions with exemption_amount of 1 will allow only 1 account to login from IP 192.168.1.4.
+	- Note: If there is no exemption, the amount of accounts logged in from a singular IP will default to World:MaxClientsPerIP
+
+== 08/23/2016 ==
+noudess: Force mobs on a depop @ end pathgrid to still do this on idle zones.
+This makes them be more random after a zone is idle, rather than always showing
+up at start point when 1st person logs into an idle zone.  Much more like live.
+I dion't think this will be much of a performance problem.  Once they path and
+depop, no mkore cpu usage.
+
+== 08/14/2016 ==
+mackal: Implement Linked Spell Reuse Timers
+	- For whatever reason this is a bit unfriendly, but that's how it is on live.
+	- Titanium is especially unfriendly with large differences in reuse times (ex higher canni and the first 4)
+	- Unsure when this went live for spells, but canni was at least linked at OoW launch
+
+== 08/13/2016 ==
+Kinglykrab: Implemented optional avoidance cap rules.
+	- Serves to eliminate God-like characters on custom servers with high item stats
+	- Rule Names:
+		- Character:EnableAvoidanceCap (default is false)
+		- Character:AvoidanceCap (default is 750, beyond 1,000 seems to make characters dodge all attacks)
+	
+== 08/02/2016 ==
+Uleat: Changed 'SendZoneSpawnsBulk' behavior to use near/far criteria (live-like) when sending packets.
+	- Zone-to-Zone client loading will see a small decrease in time (less than 10~15%)
+	- World-to-Zone client loading appears to greatly benefit from this (tested 'devastation' - pre-change: ~22 seconds, post-change: 12~15 seconds)
+	- This change does not affect the final spawning of mobs in the client
+
+== 07/31/2016 ==
+mackal: Implement more spell gems!
+	- There are a few things still left to due like make dealing with losing gems nice (reset AAs, going to an older client etc)
+	- Sadly SoF disc release doesn't support gem 10 like one might expect :(
+	- So changed clients:
+		- SoD = 10
+		- UF = 12
+		- RoF/RoF2 = 12. I know the UI supports 16, but the client does not and can cause client crashes
+	- The quest APIs assume you pass a valid spell gem ...
+
+== 07/28/2016 ==
+Uleat: Implemented zone memory-mapped file usage
+	- Zone map files are converted to pre-loaded binary files, bypassing the (sometimes) time-consuming raw data transform process
+	- There are three ways to convert files:
+			-- Do nothing! The zone bootup process will check for a mmf file and load it, if found, or create it after the 'normal' transform process is complete
+			-- Use the command line option: zone convert_map <zone_name>.map (for singular conversions)
+			-- Drop the 'convert_maps_to_mmfs.pl' into your server directory and execute it for a batch conversion
+			-- Note: Any zone maps not pre-converted will be processed once a zone is booted up that does not have one
+	- To enable this feature, you must have the 'USE_MAP_MMFS' option checked in cmake and have built binaries on that
+	- To disable this feature, or if you encouter problems, disable the 'USE_MAP_MMFS' option and rebuild your binaries
+	- This feature will test the validity of your zlib library. If you get errors/crashes upon conversion, then your zlib1.dll is most likely suspect (check our forum for solutions)
+
+== 07/25/2016 ==
+mackal: Fix up the SpellBuff struct
+	- THERE MAYBE BUGS
+	- there shouldn't though, most of the hackery was from badly named fields causing confusion
+
+== 07/09/2016 ==
+Uleat: Important fix for mob pathing
+	- This should fix failed pathing issues (and high cpu usage for zone.exe) for mobs in affect zones
+	- Changed variable 'gridno' type from int16 to int32 to reflect actual return value of fetch (values do exceed 32767 aka int16.max)
+	- Precision loss from int32 to int16 conversion was causing grid id to be changed to quest controlled movement in cases where (gridno & 0x8000 == true) 
+
+== 06/28/2016 ==
+Noudess: Resurrection effects now block certain buffs like on live.
+Noudess: Added message about why spells are blocked (rule based)
+Noudess: Added new rule:  Client:UseLiveBlockedMessage
+Uleat: Fix for bot inventory save failure involving items with unlimited charges
+
+== 06/13/2016 ==
+Noudess: Changes personal faction earned min/max to -2000/2000 from -3000/1200
+
+== 06/06/2016 ==
+Uleat: Reworked EQEmuDictionary to use class LookupEntry
+
+== 06/01/2016 ==
+Uleat: Implemented EQEmu::TintProfile
+Uleat: Implemented EQEmu::TextureProfile
+
+== 05/31/2016 ==
+Uleat: Converted enumeration MaterialSlots to EQEmu::textures::TextureSlot
+
+== 05/28/2016 ==
+Uleat: Merged client_version and inventory_version into emu_versions files
+
+== 05/27/2016 ==
+Uleat: Renamed EQEmu::Item_Struct to EQEmu::ItemBase (and appropriate files) to coincide with new inventory naming conventions
+
+== 05/25/2016 ==
+Uleat: Renamed and moved enumeration SkillUseTypes to EQEmu::skill::SkillType - added class EQEmu::SkillProfile, though not implemented at this time
+Uleat: Some more work on eq_dictionary
+
+== 05/21/2016 ==
+Uleat: Moved struct Item_Struct into namespace EQEmu along with associated enumerations - enumerations into namespace EQEmu::item (run shared_memory)
+Uleat: Fixed a few possible crash points in linux builds associated with augments/ornamentations
+
+== 05/18/2016 ==
+Uleat: Changed client 'constants' files to 'limits'
+
+== 05/10/2016 ==
+Uleat: Converted client translators' 'SerializeItem()' to recursive, single buffer methodology. Titanium SerializeItem() now adds a null term between parent items instead of the invoking function
+Uleat: Converted server 'BulkSendInventoryItems()' to use single buffer methodology
+Uleat: Added 'ItemInst::Serialize()' overload to make use of the above single buffer methodology
+
+== 05/08/2016 ==
+Uleat: Re-coded Titanium client translator 'SerializeItem()' to use coded property assignments over file enumerated ones
+
+== 04/22/2016 ==
+Uleat: Reworked ClientVersion into namespace EQEmu; Added InventoryVersion
+Uleat: Delinked current inventory slot enumeration and constants from EQEmu::constants and global definition (inv2 pre-work)
+
+== 04/19/2016 ==
+Uleat: Changed the recent EQEmu rework to eliminate the nested class design (possible cause of VS2015 update crashes - unverified)
+Uleat: Some more inv2 convergence work
+
+== 04/15/2016 ==
+Uleat: Reworked EQDictionary into namespace EQEmu
+
+== 04/08/2016 ==
+Uleat: Added Heal Rotation HOTs (Heal Override Targets) that can be set for proactive healing (default HR behavior is reactive)
+Uleat: Added the ability to save/load/delete Heal Rotations based on targeted member - load is automatic when ^hrcreate is used on a bot that has a saved HR entry
+
+== 04/07/2016 ==
+Uleat: Rework of eq_dictionary to facilitate inventory work
+
+== 04/05/2016 ==
+Uleat: Moved database query code out of bot.cpp and into the new BotDatabase class
+
+== 03/25/2016 ==
+Uleat: Fix for heal rotation 'Stack Overflow' error
+Kayen: Defensive procs will now only proc once per attack round (instead of every attack chance). 
+       Live like modifier added that decreases defensive proc chance if you are higher level then your attacker.
+
+== 03/24/2016 ==
+Kayen: Fix for AE taunt to use correct range and hate modifier.
+       Fix for spell effect version of taunt to use correct range.
+Uleat: Activation of new 'Bots' command system
+	- You will need to re-run cmake to capture the file additions and then re-compile your server binaries
+	- You will also need to manually run eqemu_update.pl and select the bots update option - you should have 2 pending updates: 9001 & 9002
+	- The new command system is accessed with the '^' character - start with '^help' and see where that takes you
+	- More information can be found on the eqemu forums
+
+== 03/05/2016 ==
+mackal: Implement extra bind points (secondary recall)
+	For SE_Gate, base2 is which bind to use (starting at 1)
+	For SE_BindAffinity, base1 is which bind to set (starting at 1)
+	For SE_GateCastersBindpoint, base1 is which bind to use (starting at 1)
+		There was actually no spells that don't send to the main bind, but it uses a base1 of 1 which matches with SE_Gate
+		This also doesn't break anything
+
+== 03/01/2016 ==
+Uleat: Fix for LDoN treasure 'npcs' not leaving a corpse (please report any issues..)
+
+== 02/29/2016 ==
+Uleat: Change in AddItemBonuses - now includes ammo slot for skill mods only. Defined SoD- client SkillModMax packet property (client does not show..but, does enforce.)
+
 == 02/11/2016 ==
 Hateborne: Added IgnoreSpellDmgLvlRestriction rule (boolean) to ignore the 5 level spread when checking to add SpellDmg
 

@@ -1,5 +1,5 @@
 /*  EQEMu:  Everquest Server Emulator
-	Copyright (C) 2001-2006  EQEMu Development Team (http://eqemulator.net)
+	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemulator.net)
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -9,11 +9,11 @@
 	but WITHOUT ANY WARRANTY except by those people which sell it, which
 	are required to give you total support for your newly bought product;
 	without even the implied warranty of MERCHANTABILITY or FITNESS FOR
-	A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
+	A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
 	You should have received a copy of the GNU General Public License
 	along with this program; if not, write to the Free Software
-	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+	Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307  USA
 */
 
 #ifdef EMBPERL
@@ -882,7 +882,7 @@ void PerlembParser::GetQuestPackageName(bool &isPlayerQuest, bool &isGlobalPlaye
 	}
 	else if(isItemQuest) {
 		// need a valid ItemInst pointer check here..unsure how to cancel this process
-		const Item_Struct* item = iteminst->GetItem();
+		const EQEmu::ItemBase* item = iteminst->GetItem();
 		package_name = "qst_item_";
 		package_name += itoa(item->ID);
 	}
@@ -972,7 +972,7 @@ void PerlembParser::ExportQGlobals(bool isPlayerQuest, bool isGlobalPlayerQuest,
 				QGlobalCache::Combine(globalMap, zone_c->GetBucket(), npcmob->GetNPCTypeID(), char_id, zone->GetZoneID());
 			}
 
-			std::list<QGlobal>::iterator iter = globalMap.begin();
+			auto iter = globalMap.begin();
 			while(iter != globalMap.end())
 			{
 				globhash[(*iter).name] = (*iter).value;
@@ -1020,7 +1020,7 @@ void PerlembParser::ExportQGlobals(bool isPlayerQuest, bool isGlobalPlayerQuest,
 			QGlobalCache::Combine(globalMap, zone_c->GetBucket(), 0, char_id, zone->GetZoneID());
 		}
 
-		std::list<QGlobal>::iterator iter = globalMap.begin();
+		auto iter = globalMap.begin();
 		while(iter != globalMap.end())
 		{
 			globhash[(*iter).name] = (*iter).value;
@@ -1052,8 +1052,8 @@ void PerlembParser::ExportMobVariables(bool isPlayerQuest, bool isGlobalPlayerQu
 
 	if(mob) {
 		ExportVar(package_name.c_str(), "name", mob->GetName());
-		ExportVar(package_name.c_str(), "race", GetRaceName(mob->GetRace()));
-		ExportVar(package_name.c_str(), "class", GetEQClassName(mob->GetClass()));
+		ExportVar(package_name.c_str(), "race", GetRaceIDName(mob->GetRace()));
+		ExportVar(package_name.c_str(), "class", GetClassIDName(mob->GetClass()));
 		ExportVar(package_name.c_str(), "ulevel", mob->GetLevel());
 		ExportVar(package_name.c_str(), "userid", mob->GetID());
 	}

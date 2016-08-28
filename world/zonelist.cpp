@@ -88,7 +88,7 @@ void ZSList::Process() {
 		Process();
 		CatchSignal(2);
 	}
-	if(reminder && reminder->Check()){
+	if(reminder && reminder->Check() && shutdowntimer){
 		SendEmoteMessage(0,0,0,15,"<SYSTEMWIDE MESSAGE>:SYSTEM MSG:World coming down, everyone log out now. World will shut down in %i minutes...", ((shutdowntimer->GetRemainingTime()/1000) / 60));
 	}
 	LinkedListIterator<ZoneServer*> iterator(list);
@@ -598,7 +598,7 @@ void ZSList::RebootZone(const char* ip1,uint16 port,const char* ip2, uint32 skip
 		iterator.Advance();
 	}
 	if (y == 0) {
-		safe_delete(tmp);
+		safe_delete_array(tmp);
 		return;
 	}
 	uint32 z = emu_random.Int(0, y-1);

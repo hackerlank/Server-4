@@ -1,5 +1,5 @@
 /*	EQEMu: Everquest Server Emulator
-	Copyright (C) 2001-2002 EQEMu Development Team (http://eqemu.org)
+	Copyright (C) 2001-2016 EQEMu Development Team (http://eqemu.org)
 
 	This program is free software; you can redistribute it and/or modify
 	it under the terms of the GNU General Public License as published by
@@ -52,6 +52,10 @@
 #include "zone.h"
 #include "queryserv.h"
 #include "command.h"
+#ifdef BOTS
+#include "bot_command.h"
+#include "bot_database.h"
+#endif
 #include "zone_config.h"
 #include "titles.h"
 #include "guild_mgr.h"
@@ -100,9 +104,9 @@ QueryServ *QServ = 0;
 TaskManager *taskmanager = 0;
 QuestParserCollection *parse = 0;
 EQEmuLogSys Log;
-
 const SPDat_Spell_Struct* spells;
 int32 SPDAT_RECORDS = -1;
+const ZoneConfig *Config;
 
 void Shutdown();
 extern void MapOpcodes();
@@ -112,6 +116,27 @@ int main(int argc, char** argv) {
 	Log.LoadLogSettingsDefaults();
 
 	set_exception_handler(); 
+
+#ifdef USE_MAP_MMFS
+	if (argc == 3 && strcasecmp(argv[1], "convert_map") == 0) {
+		if (!ZoneConfig::LoadConfig())
+			return 1;
+		Config = ZoneConfig::get();
+
+		std::string mapfile = argv[2];
+		std::transform(mapfile.begin(), mapfile.end(), mapfile.begin(), ::tolower);
+		std::string filename = Config->MapDir;
+		filename += mapfile;
+
+		auto m = new Map();
+		auto success = m->Load(filename, true);
+		delete m;
+		std::cout << mapfile.c_str() << " conversion " << (success ? "succeeded" : "failed") << std::endl;
+		
+		return 0;
+	}
+#endif /*USE_MAP_MMFS*/
+
 	QServ = new QueryServ;
 
 	Log.Out(Logs::General, Logs::Zone_Server, "Loading server configuration..");
@@ -119,7 +144,7 @@ int main(int argc, char** argv) {
 		Log.Out(Logs::General, Logs::Error, "Loading server configuration failed.");
 		return 1;
 	}
-	const ZoneConfig *Config = ZoneConfig::get();
+	Config = ZoneConfig::get();
 
 	const char *zone_name;
 	uint32 instance_id = 0;
@@ -129,7 +154,7 @@ int main(int argc, char** argv) {
 		worldserver.SetLauncherName(argv[2]);
 		auto zone_port = SplitString(argv[1], ':');
 
-		if(zone_port.size() > 0) {
+		if(!zone_port.empty()) {
 			z_name = zone_port[0];
 		}
 
@@ -149,7 +174,7 @@ int main(int argc, char** argv) {
 		worldserver.SetLauncherName(argv[2]);
 		auto zone_port = SplitString(argv[1], ':');
 
-		if(zone_port.size() > 0) {
+		if(!zone_port.empty()) {
 			z_name = zone_port[0];
 		}
 
@@ -168,7 +193,7 @@ int main(int argc, char** argv) {
 		worldserver.SetLauncherName("NONE");
 		auto zone_port = SplitString(argv[1], ':');
 
-		if(zone_port.size() > 0) {
+		if(!zone_port.empty()) {
 			z_name = zone_port[0];
 		}
 
@@ -191,7 +216,7 @@ int main(int argc, char** argv) {
 	}
 
 	worldserver.SetPassword(Config->SharedKey.c_str());
-
+	
 	Log.Out(Logs::General, Logs::Zone_Server, "Connecting to MySQL...");
 	if (!database.Connect(
 		Config->DatabaseHost.c_str(),
@@ -202,6 +227,18 @@ int main(int argc, char** argv) {
 		Log.Out(Logs::General, Logs::Error, "Cannot continue without a database connection.");
 		return 1;
 	}
+
+#ifdef BOTS
+	if (!botdb.Connect(
+		Config->DatabaseHost.c_str(),
+		Config->DatabaseUsername.c_str(),
+		Config->DatabasePassword.c_str(),
+		Config->DatabaseDB.c_str(),
+		Config->DatabasePort)) {
+		Log.Out(Logs::General, Logs::Error, "Cannot continue without a bots database connection.");
+		return 1;
+	}
+#endif
 
 	/* Register Log System and Settings */
 	Log.OnLogHookCallBackZone(&Zone::GMSayHookCallBackProcess);
@@ -238,20 +275,20 @@ int main(int argc, char** argv) {
 
 	Log.Out(Logs::General, Logs::Zone_Server, "Mapping Incoming Opcodes");
 	MapOpcodes();
-	
+
 	Log.Out(Logs::General, Logs::Zone_Server, "Loading Variables");
 	database.LoadVariables();
-	
-	char hotfix_name[256] = { 0 };
-	if(database.GetVariable("hotfix_name", hotfix_name, 256)) {
-		if(strlen(hotfix_name) > 0) {
-			Log.Out(Logs::General, Logs::Zone_Server, "Current hotfix in use: '%s'", hotfix_name);
+
+	std::string hotfix_name;
+	if(database.GetVariable("hotfix_name", hotfix_name)) {
+		if(!hotfix_name.empty()) {
+			Log.Out(Logs::General, Logs::Zone_Server, "Current hotfix in use: '%s'", hotfix_name.c_str());
 		}
 	}
 
 	Log.Out(Logs::General, Logs::Zone_Server, "Loading zone names");
 	database.LoadZoneNames();
-	
+
 	Log.Out(Logs::General, Logs::Zone_Server, "Loading items");
 	if(!database.LoadItems(hotfix_name)) {
 		Log.Out(Logs::General, Logs::Error, "Loading items FAILED!");
@@ -310,20 +347,29 @@ int main(int argc, char** argv) {
 
 	//rules:
 	{
-		char tmp[64];
-		if (database.GetVariable("RuleSet", tmp, sizeof(tmp)-1)) {
-			Log.Out(Logs::General, Logs::Zone_Server, "Loading rule set '%s'", tmp);
-			if(!RuleManager::Instance()->LoadRules(&database, tmp)) {
-				Log.Out(Logs::General, Logs::Error, "Failed to load ruleset '%s', falling back to defaults.", tmp);
+		std::string tmp;
+		if (database.GetVariable("RuleSet", tmp)) {
+			Log.Out(Logs::General, Logs::Zone_Server, "Loading rule set '%s'", tmp.c_str());
+			if(!RuleManager::Instance()->LoadRules(&database, tmp.c_str())) {
+				Log.Out(Logs::General, Logs::Error, "Failed to load ruleset '%s', falling back to defaults.", tmp.c_str());
 			}
 		} else {
 			if(!RuleManager::Instance()->LoadRules(&database, "default")) {
 				Log.Out(Logs::General, Logs::Zone_Server, "No rule set configured, using default rules");
 			} else {
-				Log.Out(Logs::General, Logs::Zone_Server, "Loaded default rule set 'default'", tmp);
+				Log.Out(Logs::General, Logs::Zone_Server, "Loaded default rule set 'default'", tmp.c_str());
 			}
 		}
 	}
+
+#ifdef BOTS
+	Log.Out(Logs::General, Logs::Zone_Server, "Loading bot commands");
+	int botretval = bot_command_init();
+	if (botretval<0)
+		Log.Out(Logs::General, Logs::Error, "Bot command loading FAILED");
+	else
+		Log.Out(Logs::General, Logs::Zone_Server, "%d bot commands loaded", botretval);
+#endif
 
 	if(RuleB(TaskSystem, EnableTaskSystem)) {
 		Log.Out(Logs::General, Logs::Tasks, "[INIT] Loading Tasks");
@@ -333,12 +379,12 @@ int main(int argc, char** argv) {
 
 	parse = new QuestParserCollection();
 #ifdef LUA_EQEMU
-	LuaParser *lua_parser = new LuaParser();
+	auto lua_parser = new LuaParser();
 	parse->RegisterQuestInterface(lua_parser, "lua");
 #endif
 
 #ifdef EMBPERL
-	PerlembParser *perl_parser = new PerlembParser();
+	auto perl_parser = new PerlembParser();
 	parse->RegisterQuestInterface(perl_parser, "pl");
 
 	/* Load Perl Event Export Settings */
@@ -423,7 +469,7 @@ int main(int argc, char** argv) {
 			struct in_addr	in;
 			in.s_addr = eqsi->GetRemoteIP();
 			Log.Out(Logs::Detail, Logs::World_Server, "New client from %s:%d", inet_ntoa(in), ntohs(eqsi->GetRemotePort()));
-			Client* client = new Client(eqsi);
+			auto client = new Client(eqsi);
 			entity_list.AddClient(client);
 		}
 
@@ -524,6 +570,9 @@ int main(int argc, char** argv) {
 	worldserver.Disconnect();
 	safe_delete(taskmanager);
 	command_deinit();
+#ifdef BOTS
+	bot_command_deinit();
+#endif
 	safe_delete(parse);
 	Log.Out(Logs::General, Logs::Zone_Server, "Proper zone shutdown complete.");
 	Log.CloseFileLogs();
