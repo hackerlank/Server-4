@@ -29,7 +29,7 @@
 #include "../eq_packet_structs.h"
 #include "../misc_functions.h"
 #include "../string_util.h"
-#include "../item.h"
+#include "../inventory_profile.h"
 #include "rof_structs.h"
 #include "../rulesys.h"
 
@@ -45,7 +45,7 @@ namespace RoF
 	static OpcodeManager *opcodes = nullptr;
 	static Strategy struct_strategy;
 
-	void SerializeItem(EQEmu::OutBuffer& ob, const ItemInst *inst, int16 slot_id, uint8 depth);
+	void SerializeItem(EQEmu::OutBuffer& ob, const EQEmu::ItemInstance *inst, int16 slot_id, uint8 depth);
 
 	// server to client inventory location converters
 	static inline structs::InventorySlot_Struct ServerToRoFSlot(uint32 serverSlot);
@@ -66,6 +66,9 @@ namespace RoF
 	static inline CastingSlot ServerToRoFCastingSlot(EQEmu::CastingSlot slot);
 	static inline EQEmu::CastingSlot RoFToServerCastingSlot(CastingSlot slot);
 
+	static inline int ServerToRoFBuffSlot(int index);
+	static inline int RoFToServerBuffSlot(int index);
+
 	void Register(EQStreamIdentifier &into)
 	{
 		//create our opcode manager if we havent already
@@ -80,14 +83,14 @@ namespace RoF
 			//TODO: figure out how to support shared memory with multiple patches...
 			opcodes = new RegularOpcodeManager();
 			if (!opcodes->LoadOpcodes(opfile.c_str())) {
-				Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Error loading opcodes file %s. Not registering patch %s.", opfile.c_str(), name);
+				Log(Logs::General, Logs::Netcode, "[OPCODES] Error loading opcodes file %s. Not registering patch %s.", opfile.c_str(), name);
 				return;
 			}
 		}
 
 		//ok, now we have what we need to register.
 
-		EQStream::Signature signature;
+		EQStreamInterface::Signature signature;
 		std::string pname;
 
 		//register our world signature.
@@ -103,7 +106,7 @@ namespace RoF
 		signature.first_length = sizeof(structs::ClientZoneEntry_Struct);
 		signature.first_eq_opcode = opcodes->EmuToEQ(OP_ZoneEntry);
 		into.RegisterPatch(signature, pname.c_str(), &opcodes, &struct_strategy);
-		Log.Out(Logs::General, Logs::Netcode, "[IDENTIFY] Registered patch %s", name);
+		Log(Logs::General, Logs::Netcode, "[IDENTIFY] Registered patch %s", name);
 	}
 
 	void Reload()
@@ -120,10 +123,10 @@ namespace RoF
 			opfile += name;
 			opfile += ".conf";
 			if (!opcodes->ReloadOpcodes(opfile.c_str())) {
-				Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Error reloading opcodes file %s for patch %s.", opfile.c_str(), name);
+				Log(Logs::General, Logs::Netcode, "[OPCODES] Error reloading opcodes file %s for patch %s.", opfile.c_str(), name);
 				return;
 			}
-			Log.Out(Logs::General, Logs::Netcode, "[OPCODES] Reloaded opcodes for patch %s", name);
+			Log(Logs::General, Logs::Netcode, "[OPCODES] Reloaded opcodes for patch %s", name);
 		}
 	}
 
@@ -344,7 +347,7 @@ namespace RoF
 
 		if (EntryCount == 0 || (in->size % sizeof(BazaarSearchResults_Struct)) != 0)
 		{
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(BazaarSearchResults_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(BazaarSearchResults_Struct));
 			delete in;
 			return;
 		}
@@ -423,15 +426,8 @@ namespace RoF
 		OUT(buff.y);
 		OUT(buff.x);
 		OUT(buff.z);
-		uint16 buffslot = emu->slotid;
-		// Not sure if this is needs amending for RoF yet.
-		if (buffslot >= 25)
-		{
-			buffslot += 17;
-		}
-
 		// TODO: implement slot_data stuff
-		eq->slotid = buffslot;
+		eq->slotid = ServerToRoFBuffSlot(emu->slotid);
 
 		if (emu->bufffade == 1)
 			eq->bufffade = 1;
@@ -447,10 +443,10 @@ namespace RoF
 			outapp->WriteUInt32(0);	// tic timer
 			outapp->WriteUInt8(0);		// Type of OP_BuffCreate packet ?
 			outapp->WriteUInt16(1);		// 1 buff in this packet
-			outapp->WriteUInt32(buffslot);
+			outapp->WriteUInt32(eq->slotid);
 			outapp->WriteUInt32(0xffffffff);		// SpellID (0xffff to remove)
 			outapp->WriteUInt32(0);			// Duration
-			outapp->WriteUInt32(0);			// ?
+			outapp->WriteUInt32(0);			// numhits
 			outapp->WriteUInt8(0);		// Caster name
 			outapp->WriteUInt8(0);		// Type
 		}
@@ -464,7 +460,7 @@ namespace RoF
 	{
 		SETUP_VAR_ENCODE(BuffIcon_Struct);
 
-		uint32 sz = 12 + (17 * emu->count);
+		uint32 sz = 12 + (17 * emu->count) + emu->name_lengths; // 17 includes nullterm
 		__packet->size = sz;
 		__packet->pBuffer = new unsigned char[sz];
 		memset(__packet->pBuffer, 0, sz);
@@ -474,21 +470,13 @@ namespace RoF
 		__packet->WriteUInt8(emu->all_buffs);			// 1 indicates all buffs on the player (0 to add or remove a single buff)
 		__packet->WriteUInt16(emu->count);
 
-		for (uint16 i = 0; i < emu->count; ++i)
+		for (int i = 0; i < emu->count; ++i)
 		{
-			uint16 buffslot = emu->entries[i].buff_slot;
-			if (emu->type == 0) { // only correct for self packets
-				if (emu->entries[i].buff_slot >= 25)
-					buffslot += 17;
-				if (buffslot == 54)
-					buffslot = 62;
-			}
-
-			__packet->WriteUInt32(buffslot);
+			__packet->WriteUInt32(emu->type == 0 ? ServerToRoFBuffSlot(emu->entries[i].buff_slot) : emu->entries[i].buff_slot);
 			__packet->WriteUInt32(emu->entries[i].spell_id);
 			__packet->WriteUInt32(emu->entries[i].tics_remaining);
 			__packet->WriteUInt32(emu->entries[i].num_hits); // Unknown
-			__packet->WriteString("");
+			__packet->WriteString(emu->entries[i].caster);
 		}
 		__packet->WriteUInt8(emu->type); // Unknown
 
@@ -581,7 +569,7 @@ namespace RoF
 
 		int item_count = in->size / sizeof(EQEmu::InternalSerializedItem_Struct);
 		if (!item_count || (in->size % sizeof(EQEmu::InternalSerializedItem_Struct)) != 0) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d",
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d",
 				opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(EQEmu::InternalSerializedItem_Struct));
 
 			delete in;
@@ -596,9 +584,9 @@ namespace RoF
 		ob.write((const char*)&item_count, sizeof(uint32));
 
 		for (int index = 0; index < item_count; ++index, ++eq) {
-			SerializeItem(ob, (const ItemInst*)eq->inst, eq->slot_id, 0);
+			SerializeItem(ob, (const EQEmu::ItemInstance*)eq->inst, eq->slot_id, 0);
 			if (ob.tellp() == last_pos)
-				Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d during OP_CharInventory.  Item skipped.", eq->slot_id);
+				Log(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d during OP_CharInventory.  Item skipped.", eq->slot_id);
 
 			last_pos = ob.tellp();
 		}
@@ -1504,17 +1492,6 @@ namespace RoF
 		FINISH_ENCODE();
 	}
 
-	ENCODE(OP_InterruptCast)
-	{
-		ENCODE_LENGTH_EXACT(InterruptCast_Struct);
-		SETUP_DIRECT_ENCODE(InterruptCast_Struct, structs::InterruptCast_Struct);
-
-		OUT(spawnid);
-		OUT(messageid);
-
-		FINISH_ENCODE();
-	}
-
 	ENCODE(OP_ItemLinkResponse) { ENCODE_FORWARD(OP_ItemPacket); }
 
 	ENCODE(OP_ItemPacket)
@@ -1533,9 +1510,9 @@ namespace RoF
 
 		ob.write((const char*)__emu_buffer, 4);
 
-		SerializeItem(ob, (const ItemInst*)int_struct->inst, int_struct->slot_id, 0);
+		SerializeItem(ob, (const EQEmu::ItemInstance*)int_struct->inst, int_struct->slot_id, 0);
 		if (ob.tellp() == last_pos) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d.", int_struct->slot_id);
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Serialization failed on item slot %d.", int_struct->slot_id);
 			delete in;
 			return;
 		}
@@ -1872,6 +1849,7 @@ namespace RoF
 		eq->Text_Count = 4096;
 		memcpy(eq->Text, emu->Text, sizeof(eq->Text));
 		OUT(Buttons);
+		OUT(SoundControls);
 		OUT(Duration);
 		OUT(PopupID);
 		OUT(NegativeID);
@@ -2079,7 +2057,7 @@ namespace RoF
 
 		outapp->WriteUInt32(22);		// Equipment count
 
-		for (int r = EQEmu::textures::TextureBegin; r < EQEmu::textures::TextureCount; r++)
+		for (int r = EQEmu::textures::textureBegin; r < EQEmu::textures::materialCount; r++)
 		{
 			outapp->WriteUInt32(emu->item_material.Slot[r].Material);
 			outapp->WriteUInt32(0);
@@ -2099,9 +2077,9 @@ namespace RoF
 			outapp->WriteUInt32(0);
 		}
 
-		outapp->WriteUInt32(EQEmu::textures::TextureCount);		// Equipment2 count
+		outapp->WriteUInt32(EQEmu::textures::materialCount);		// Equipment2 count
 
-		for (int r = EQEmu::textures::TextureBegin; r < EQEmu::textures::TextureCount; r++)
+		for (int r = EQEmu::textures::textureBegin; r < EQEmu::textures::materialCount; r++)
 		{
 			outapp->WriteUInt32(0);
 			outapp->WriteUInt32(0);
@@ -2110,7 +2088,7 @@ namespace RoF
 			outapp->WriteUInt32(0);
 		}
 
-		outapp->WriteUInt32(EQEmu::textures::TextureCount);		// Tint Count
+		outapp->WriteUInt32(EQEmu::textures::materialCount);		// Tint Count
 
 		for (int r = 0; r < 7; r++)
 		{
@@ -2120,7 +2098,7 @@ namespace RoF
 		outapp->WriteUInt32(0);
 		outapp->WriteUInt32(0);
 
-		outapp->WriteUInt32(EQEmu::textures::TextureCount);		// Tint2 Count
+		outapp->WriteUInt32(EQEmu::textures::materialCount);		// Tint2 Count
 
 		for (int r = 0; r < 7; r++)
 		{
@@ -2206,11 +2184,11 @@ namespace RoF
 			outapp->WriteUInt32(emu->skills[r]);
 		}
 
-		outapp->WriteUInt32(25);			// Unknown count
+		outapp->WriteUInt32(structs::MAX_PP_INNATE_SKILL);			// Innate Skills count
 
-		for (uint32 r = 0; r < 25; r++)
+		for (uint32 r = 0; r < structs::MAX_PP_INNATE_SKILL; r++)
 		{
-			outapp->WriteUInt32(0);			// Unknown
+			outapp->WriteUInt32(emu->InnateSkills[r]);			// Innate Skills (regen, slam, etc)
 		}
 
 		outapp->WriteUInt32(structs::MAX_PP_DISCIPLINES);	// Discipline count
@@ -2713,7 +2691,7 @@ namespace RoF
 
 		outapp->WriteUInt8(0);				// Unknown
 
-		Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Player Profile Packet is %i bytes", outapp->GetWritePosition());
+		Log(Logs::General, Logs::Netcode, "[STRUCTS] Player Profile Packet is %i bytes", outapp->GetWritePosition());
 
 		auto NewBuffer = new unsigned char[outapp->GetWritePosition()];
 		memcpy(NewBuffer, outapp->pBuffer, outapp->GetWritePosition());
@@ -3059,12 +3037,12 @@ namespace RoF
 			eq_cse->Gender = emu_cse->Gender;
 			eq_cse->Face = emu_cse->Face;
 
-			for (int equip_index = 0; equip_index < EQEmu::textures::TextureCount; equip_index++) {
+			for (int equip_index = 0; equip_index < EQEmu::textures::materialCount; equip_index++) {
 				eq_cse->Equip[equip_index].Material = emu_cse->Equip[equip_index].Material;
 				eq_cse->Equip[equip_index].Unknown1 = emu_cse->Equip[equip_index].Unknown1;
-				eq_cse->Equip[equip_index].EliteMaterial = emu_cse->Equip[equip_index].EliteMaterial;
-				eq_cse->Equip[equip_index].HeroForgeModel = emu_cse->Equip[equip_index].HeroForgeModel;
-				eq_cse->Equip[equip_index].Material2 = emu_cse->Equip[equip_index].Material2;
+				eq_cse->Equip[equip_index].EliteMaterial = emu_cse->Equip[equip_index].EliteModel;
+				eq_cse->Equip[equip_index].HeroForgeModel = emu_cse->Equip[equip_index].HerosForgeModel;
+				eq_cse->Equip[equip_index].Material2 = emu_cse->Equip[equip_index].Unknown2;
 				eq_cse->Equip[equip_index].Color = emu_cse->Equip[equip_index].Color;
 			}
 
@@ -3573,7 +3551,7 @@ namespace RoF
 
 		if (EntryCount == 0 || ((in->size % sizeof(Track_Struct))) != 0)
 		{
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Track_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Track_Struct));
 			delete in;
 			return;
 		}
@@ -3921,7 +3899,7 @@ namespace RoF
 		//determine and verify length
 		int entrycount = in->size / sizeof(Spawn_Struct);
 		if (entrycount == 0 || (in->size % sizeof(Spawn_Struct)) != 0) {
-			Log.Out(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Spawn_Struct));
+			Log(Logs::General, Logs::Netcode, "[STRUCTS] Wrong size on outbound %s: Got %d, expected multiple of %d", opcodes->EmuToName(in->GetOpcode()), in->size, sizeof(Spawn_Struct));
 			delete in;
 			return;
 		}
@@ -3952,7 +3930,7 @@ namespace RoF
 			if (strlen(emu->suffix))
 				PacketSize += strlen(emu->suffix) + 1;
 
-			bool ShowName = 1;
+			bool ShowName = emu->show_name;
 			if (emu->bodytype >= 66)
 			{
 				emu->race = 127;
@@ -4096,7 +4074,7 @@ namespace RoF
 
 			if ((emu->NPC == 0) || (emu->race <= 12) || (emu->race == 128) || (emu->race == 130) || (emu->race == 330) || (emu->race == 522))
 			{
-				for (k = EQEmu::textures::TextureBegin; k < EQEmu::textures::TextureCount; ++k)
+				for (k = EQEmu::textures::textureBegin; k < EQEmu::textures::materialCount; ++k)
 				{
 					{
 						VARSTRUCT_ENCODE_TYPE(uint32, Buffer, emu->equipment_tint.Slot[k].Color);
@@ -4105,15 +4083,15 @@ namespace RoF
 
 				structs::Texture_Struct *Equipment = (structs::Texture_Struct *)Buffer;
 
-				for (k = EQEmu::textures::TextureBegin; k < EQEmu::textures::TextureCount; k++) {
+				for (k = EQEmu::textures::textureBegin; k < EQEmu::textures::materialCount; k++) {
 					Equipment[k].Material = emu->equipment.Slot[k].Material;
 					Equipment[k].Unknown1 = emu->equipment.Slot[k].Unknown1;
-					Equipment[k].EliteMaterial = emu->equipment.Slot[k].EliteMaterial;
-					Equipment[k].HeroForgeModel = emu->equipment.Slot[k].HeroForgeModel;
-					Equipment[k].Material2 = emu->equipment.Slot[k].Material2;
+					Equipment[k].EliteMaterial = emu->equipment.Slot[k].EliteModel;
+					Equipment[k].HeroForgeModel = emu->equipment.Slot[k].HerosForgeModel;
+					Equipment[k].Material2 = emu->equipment.Slot[k].Unknown2;
 				}
 
-				Buffer += (sizeof(structs::Texture_Struct) * EQEmu::textures::TextureCount);
+				Buffer += (sizeof(structs::Texture_Struct) * EQEmu::textures::materialCount);
 			}
 			else
 			{
@@ -4169,7 +4147,7 @@ namespace RoF
 			Buffer += 29;
 			if (Buffer != (BufferStart + PacketSize))
 			{
-				Log.Out(Logs::General, Logs::Netcode, "[ERROR] SPAWN ENCODE LOGIC PROBLEM: Buffer pointer is now %i from end", Buffer - (BufferStart + PacketSize));
+				Log(Logs::General, Logs::Netcode, "[ERROR] SPAWN ENCODE LOGIC PROBLEM: Buffer pointer is now %i from end", Buffer - (BufferStart + PacketSize));
 			}
 			//Log.LogDebugType(Logs::General, Logs::Netcode, "[ERROR] Sending zone spawn for %s packet is %i bytes", emu->name, outapp->size);
 			//Log.Hex(Logs::Netcode, outapp->pBuffer, outapp->size);
@@ -4312,7 +4290,7 @@ namespace RoF
 		IN(buff.unknown003);
 		IN(buff.spellid);
 		IN(buff.duration);
-		IN(slotid);
+		emu->slotid = RoFToServerBuffSlot(eq->slotid);
 		IN(bufffade);
 
 		FINISH_DIRECT_DECODE();
@@ -4325,7 +4303,7 @@ namespace RoF
 		DECODE_LENGTH_EXACT(structs::BuffRemoveRequest_Struct);
 		SETUP_DIRECT_DECODE(BuffRemoveRequest_Struct, structs::BuffRemoveRequest_Struct);
 
-		emu->SlotID = (eq->SlotID < 42) ? eq->SlotID : (eq->SlotID - 17);
+		emu->SlotID = RoFToServerBuffSlot(eq->SlotID);
 
 		IN(EntityID);
 
@@ -4738,7 +4716,7 @@ namespace RoF
 			return;
 		}
 		default:
-			Log.Out(Logs::Detail, Logs::Netcode, "Unhandled OP_GuildBank action");
+			Log(Logs::Detail, Logs::Netcode, "Unhandled OP_GuildBank action");
 			__packet->SetOpcode(OP_Unknown); /* invalidate the packet */
 			return;
 		}
@@ -4829,10 +4807,9 @@ namespace RoF
 
 		IN(item_id);
 		int r;
-		for (r = 0; r < EQEmu::legacy::ITEM_COMMON_SIZE; r++) {
+		for (r = EQEmu::inventory::socketBegin; r < EQEmu::inventory::SocketCount; r++) {
 			IN(augments[r]);
 		}
-		// Max Augs is now 6, but no code to support that many yet
 		IN(link_hash);
 		IN(icon);
 
@@ -4885,7 +4862,7 @@ namespace RoF
 		SETUP_DIRECT_DECODE(MoveItem_Struct, structs::MoveItem_Struct);
 
 		//Log.LogDebugType(Logs::General, Logs::Netcode, "[ERROR] Moved item from %u to %u", eq->from_slot.MainSlot, eq->to_slot.MainSlot);
-		Log.Out(Logs::General, Logs::Netcode, "[RoF] MoveItem SlotType from %i to %i, MainSlot from %i to %i, SubSlot from %i to %i, AugSlot from %i to %i, Unknown01 from %i to %i, Number %u", eq->from_slot.Type, eq->to_slot.Type, eq->from_slot.Slot, eq->to_slot.Slot, eq->from_slot.SubIndex, eq->to_slot.SubIndex, eq->from_slot.AugIndex, eq->to_slot.AugIndex, eq->from_slot.Unknown01, eq->to_slot.Unknown01, eq->number_in_stack);
+		Log(Logs::General, Logs::Netcode, "[RoF] MoveItem SlotType from %i to %i, MainSlot from %i to %i, SubSlot from %i to %i, AugSlot from %i to %i, Unknown01 from %i to %i, Number %u", eq->from_slot.Type, eq->to_slot.Type, eq->from_slot.Slot, eq->to_slot.Slot, eq->from_slot.SubIndex, eq->to_slot.SubIndex, eq->from_slot.AugIndex, eq->to_slot.AugIndex, eq->from_slot.Unknown01, eq->to_slot.Unknown01, eq->number_in_stack);
 		emu->from_slot = RoFToServerSlot(eq->from_slot);
 		emu->to_slot = RoFToServerSlot(eq->to_slot);
 		IN(number_in_stack);
@@ -5209,9 +5186,9 @@ namespace RoF
 		return NextItemInstSerialNumber;
 	}
 
-	void SerializeItem(EQEmu::OutBuffer& ob, const ItemInst *inst, int16 slot_id_in, uint8 depth)
+	void SerializeItem(EQEmu::OutBuffer& ob, const EQEmu::ItemInstance *inst, int16 slot_id_in, uint8 depth)
 	{
-		const EQEmu::ItemBase *item = inst->GetUnscaledItem();
+		const EQEmu::ItemData *item = inst->GetUnscaledItem();
 		
 		RoF::structs::ItemSerializationHeader hdr;
 
@@ -5265,7 +5242,7 @@ namespace RoF
 
 		if (inst->GetOrnamentationIDFile() && inst->GetOrnamentationIcon()) {
 			ornaIcon = inst->GetOrnamentationIcon();
-			heroModel = inst->GetOrnamentHeroModel(Inventory::CalcMaterialFromSlot(slot_id_in));
+			heroModel = inst->GetOrnamentHeroModel(EQEmu::InventoryProfile::CalcMaterialFromSlot(slot_id_in));
 
 			char tmp[30]; memset(tmp, 0x0, 30); sprintf(tmp, "IT%d", inst->GetOrnamentationIDFile());
 
@@ -5622,18 +5599,18 @@ namespace RoF
 
 		ob.write((const char*)&subitem_count, sizeof(uint32));
 
-		for (uint32 index = SUB_INDEX_BEGIN; index < EQEmu::legacy::ITEM_CONTAINER_SIZE; ++index) {
-			ItemInst* sub = inst->GetItem(index);
+		for (uint32 index = EQEmu::inventory::containerBegin; index < EQEmu::inventory::ContainerCount; ++index) {
+			EQEmu::ItemInstance* sub = inst->GetItem(index);
 			if (!sub)
 				continue;
 
 			int SubSlotNumber = INVALID_INDEX;
 			if (slot_id_in >= EQEmu::legacy::GENERAL_BEGIN && slot_id_in <= EQEmu::legacy::GENERAL_END)
-				SubSlotNumber = (((slot_id_in + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + index + 1);
+				SubSlotNumber = (((slot_id_in + 3) * EQEmu::inventory::ContainerCount) + index + 1);
 			else if (slot_id_in >= EQEmu::legacy::BANK_BEGIN && slot_id_in <= EQEmu::legacy::BANK_END)
-				SubSlotNumber = (((slot_id_in - EQEmu::legacy::BANK_BEGIN) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + EQEmu::legacy::BANK_BAGS_BEGIN + index);
+				SubSlotNumber = (((slot_id_in - EQEmu::legacy::BANK_BEGIN) * EQEmu::inventory::ContainerCount) + EQEmu::legacy::BANK_BAGS_BEGIN + index);
 			else if (slot_id_in >= EQEmu::legacy::SHARED_BANK_BEGIN && slot_id_in <= EQEmu::legacy::SHARED_BANK_END)
-				SubSlotNumber = (((slot_id_in - EQEmu::legacy::SHARED_BANK_BEGIN) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + EQEmu::legacy::SHARED_BANK_BAGS_BEGIN + index);
+				SubSlotNumber = (((slot_id_in - EQEmu::legacy::SHARED_BANK_BEGIN) * EQEmu::inventory::ContainerCount) + EQEmu::legacy::SHARED_BANK_BAGS_BEGIN + index);
 			else
 				SubSlotNumber = slot_id_in;
 
@@ -5659,17 +5636,17 @@ namespace RoF
 
 		uint32 TempSlot = 0;
 
-		if (serverSlot < 56 || serverSlot == EQEmu::legacy::SlotPowerSource) { // Main Inventory and Cursor
+		if (serverSlot < 56 || serverSlot == EQEmu::inventory::slotPowerSource) { // Main Inventory and Cursor
 			RoFSlot.Type = invtype::InvTypePossessions;
 			RoFSlot.Slot = serverSlot;
 
-			if (serverSlot == EQEmu::legacy::SlotPowerSource)
+			if (serverSlot == EQEmu::inventory::slotPowerSource)
 				RoFSlot.Slot = invslot::PossessionsPowerSource;
 
-			else if (serverSlot >= EQEmu::legacy::SlotCursor) // Cursor and Extended Corpse Inventory
+			else if (serverSlot >= EQEmu::inventory::slotCursor) // Cursor and Extended Corpse Inventory
 				RoFSlot.Slot += 3;
 
-			else if (serverSlot >= EQEmu::legacy::SlotAmmo) // (> 20)
+			else if (serverSlot >= EQEmu::inventory::slotAmmo) // (> 20)
 				RoFSlot.Slot += 1;
 		}
 
@@ -5681,8 +5658,8 @@ namespace RoF
 		else if (serverSlot >= EQEmu::legacy::GENERAL_BAGS_BEGIN && serverSlot <= EQEmu::legacy::CURSOR_BAG_END) { // (> 250 && < 341)
 			RoFSlot.Type = invtype::InvTypePossessions;
 			TempSlot = serverSlot - 1;
-			RoFSlot.Slot = int(TempSlot / EQEmu::legacy::ITEM_CONTAINER_SIZE) - 2;
-			RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 2) * EQEmu::legacy::ITEM_CONTAINER_SIZE);
+			RoFSlot.Slot = int(TempSlot / EQEmu::inventory::ContainerCount) - 2;
+			RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 2) * EQEmu::inventory::ContainerCount);
 
 			if (RoFSlot.Slot >= invslot::PossessionsGeneral9) // (> 30)
 				RoFSlot.Slot = invslot::PossessionsCursor;
@@ -5699,8 +5676,8 @@ namespace RoF
 			RoFSlot.Slot = TempSlot;
 
 			if (TempSlot > 30) { // (> 30)
-				RoFSlot.Slot = int(TempSlot / EQEmu::legacy::ITEM_CONTAINER_SIZE) - 3;
-				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE);
+				RoFSlot.Slot = int(TempSlot / EQEmu::inventory::ContainerCount) - 3;
+				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::inventory::ContainerCount);
 			}
 		}
 
@@ -5710,8 +5687,8 @@ namespace RoF
 			RoFSlot.Slot = TempSlot;
 
 			if (TempSlot > 30) { // (> 30)
-				RoFSlot.Slot = int(TempSlot / EQEmu::legacy::ITEM_CONTAINER_SIZE) - 3;
-				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE);
+				RoFSlot.Slot = int(TempSlot / EQEmu::inventory::ContainerCount) - 3;
+				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::inventory::ContainerCount);
 			}
 		}
 
@@ -5721,8 +5698,8 @@ namespace RoF
 			RoFSlot.Slot = TempSlot;
 
 			if (TempSlot > 30) {
-				RoFSlot.Slot = int(TempSlot / EQEmu::legacy::ITEM_CONTAINER_SIZE) - 3;
-				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE);
+				RoFSlot.Slot = int(TempSlot / EQEmu::inventory::ContainerCount) - 3;
+				RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 3) * EQEmu::inventory::ContainerCount);
 			}
 
 			/*
@@ -5745,7 +5722,7 @@ namespace RoF
 			RoFSlot.Slot = TempSlot;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Type, RoFSlot.Unknown02, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Type, RoFSlot.Unknown02, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
 
 		return RoFSlot;
 	}
@@ -5760,16 +5737,16 @@ namespace RoF
 
 		uint32 TempSlot = 0;
 
-		if (serverSlot < 56 || serverSlot == EQEmu::legacy::SlotPowerSource) { // (< 52)
+		if (serverSlot < 56 || serverSlot == EQEmu::inventory::slotPowerSource) { // (< 52)
 			RoFSlot.Slot = serverSlot;
 
-			if (serverSlot == EQEmu::legacy::SlotPowerSource)
+			if (serverSlot == EQEmu::inventory::slotPowerSource)
 				RoFSlot.Slot = invslot::PossessionsPowerSource;
 
-			else if (serverSlot >= EQEmu::legacy::SlotCursor) // Cursor and Extended Corpse Inventory
+			else if (serverSlot >= EQEmu::inventory::slotCursor) // Cursor and Extended Corpse Inventory
 				RoFSlot.Slot += 3;
 
-			else if (serverSlot >= EQEmu::legacy::SlotAmmo) // Ammo and Personl Inventory
+			else if (serverSlot >= EQEmu::inventory::slotAmmo) // Ammo and Personl Inventory
 				RoFSlot.Slot += 1;
 
 			/*else if (ServerSlot >= MainCursor) { // Cursor
@@ -5782,11 +5759,11 @@ namespace RoF
 
 		else if (serverSlot >= EQEmu::legacy::GENERAL_BAGS_BEGIN && serverSlot <= EQEmu::legacy::CURSOR_BAG_END) {
 			TempSlot = serverSlot - 1;
-			RoFSlot.Slot = int(TempSlot / EQEmu::legacy::ITEM_CONTAINER_SIZE) - 2;
-			RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 2) * EQEmu::legacy::ITEM_CONTAINER_SIZE);
+			RoFSlot.Slot = int(TempSlot / EQEmu::inventory::ContainerCount) - 2;
+			RoFSlot.SubIndex = TempSlot - ((RoFSlot.Slot + 2) * EQEmu::inventory::ContainerCount);
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert Server Slot %i to RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i", serverSlot, RoFSlot.Slot, RoFSlot.SubIndex, RoFSlot.AugIndex, RoFSlot.Unknown01);
 
 		return RoFSlot;
 	}
@@ -5803,7 +5780,7 @@ namespace RoF
 
 		if (rofSlot.Type == invtype::InvTypePossessions && rofSlot.Slot < 57) { // Worn/Personal Inventory and Cursor (< 51)
 			if (rofSlot.Slot == invslot::PossessionsPowerSource)
-				TempSlot = EQEmu::legacy::SlotPowerSource;
+				TempSlot = EQEmu::inventory::slotPowerSource;
 
 			else if (rofSlot.Slot >= invslot::PossessionsCursor) // Cursor and Extended Corpse Inventory
 				TempSlot = rofSlot.Slot - 3;
@@ -5825,8 +5802,8 @@ namespace RoF
 			else // Worn Slots
 				TempSlot = rofSlot.Slot;
 
-			if (rofSlot.SubIndex >= SUB_INDEX_BEGIN) // Bag Slots
-				TempSlot = ((TempSlot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + rofSlot.SubIndex + 1;
+			if (rofSlot.SubIndex >= EQEmu::inventory::containerBegin) // Bag Slots
+				TempSlot = ((TempSlot + 3) * EQEmu::inventory::ContainerCount) + rofSlot.SubIndex + 1;
 
 			ServerSlot = TempSlot;
 		}
@@ -5834,8 +5811,8 @@ namespace RoF
 		else if (rofSlot.Type == invtype::InvTypeBank) {
 			TempSlot = EQEmu::legacy::BANK_BEGIN;
 
-			if (rofSlot.SubIndex >= SUB_INDEX_BEGIN)
-				TempSlot += ((rofSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + rofSlot.SubIndex + 1;
+			if (rofSlot.SubIndex >= EQEmu::inventory::containerBegin)
+				TempSlot += ((rofSlot.Slot + 3) * EQEmu::inventory::ContainerCount) + rofSlot.SubIndex + 1;
 
 			else
 				TempSlot += rofSlot.Slot;
@@ -5846,8 +5823,8 @@ namespace RoF
 		else if (rofSlot.Type == invtype::InvTypeSharedBank) {
 			TempSlot = EQEmu::legacy::SHARED_BANK_BEGIN;
 
-			if (rofSlot.SubIndex >= SUB_INDEX_BEGIN)
-				TempSlot += ((rofSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + rofSlot.SubIndex + 1;
+			if (rofSlot.SubIndex >= EQEmu::inventory::containerBegin)
+				TempSlot += ((rofSlot.Slot + 3) * EQEmu::inventory::ContainerCount) + rofSlot.SubIndex + 1;
 
 			else
 				TempSlot += rofSlot.Slot;
@@ -5858,10 +5835,10 @@ namespace RoF
 		else if (rofSlot.Type == invtype::InvTypeTrade) {
 			TempSlot = EQEmu::legacy::TRADE_BEGIN;
 
-			if (rofSlot.SubIndex >= SUB_INDEX_BEGIN)
-				TempSlot += ((rofSlot.Slot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + rofSlot.SubIndex + 1;
+			if (rofSlot.SubIndex >= EQEmu::inventory::containerBegin)
+				TempSlot += ((rofSlot.Slot + 3) * EQEmu::inventory::ContainerCount) + rofSlot.SubIndex + 1;
 			// OLD CODE:
-			//TempSlot += 100 + (RoFSlot.MainSlot * EQEmu::legacy::ITEM_CONTAINER_SIZE) + RoFSlot.SubSlot;
+			//TempSlot += 100 + (RoFSlot.MainSlot * EQEmu::inventory::ContainerCount) + RoFSlot.SubSlot;
 
 			else
 				TempSlot += rofSlot.Slot;
@@ -5872,7 +5849,7 @@ namespace RoF
 		else if (rofSlot.Type == invtype::InvTypeWorld) {
 			TempSlot = EQEmu::legacy::WORLD_BEGIN;
 
-			if (rofSlot.Slot >= SUB_INDEX_BEGIN)
+			if (rofSlot.Slot >= EQEmu::inventory::containerBegin)
 				TempSlot += rofSlot.Slot;
 
 			ServerSlot = TempSlot;
@@ -5891,7 +5868,7 @@ namespace RoF
 			ServerSlot = INVALID_INDEX;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Type, rofSlot.Unknown02, rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Type %i, Unk2 %i, Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Type, rofSlot.Unknown02, rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
 
 		return ServerSlot;
 	}
@@ -5903,7 +5880,7 @@ namespace RoF
 
 		if (rofSlot.Slot < 57) { // Worn/Personal Inventory and Cursor (< 33)
 			if (rofSlot.Slot == invslot::PossessionsPowerSource)
-				TempSlot = EQEmu::legacy::SlotPowerSource;
+				TempSlot = EQEmu::inventory::slotPowerSource;
 
 			else if (rofSlot.Slot >= invslot::PossessionsCursor) // Cursor and Extended Corpse Inventory
 				TempSlot = rofSlot.Slot - 3;
@@ -5920,13 +5897,13 @@ namespace RoF
 			else
 				TempSlot = rofSlot.Slot;
 
-			if (rofSlot.SubIndex >= SUB_INDEX_BEGIN) // Bag Slots
-				TempSlot = ((TempSlot + 3) * EQEmu::legacy::ITEM_CONTAINER_SIZE) + rofSlot.SubIndex + 1;
+			if (rofSlot.SubIndex >= EQEmu::inventory::containerBegin) // Bag Slots
+				TempSlot = ((TempSlot + 3) * EQEmu::inventory::ContainerCount) + rofSlot.SubIndex + 1;
 
 			ServerSlot = TempSlot;
 		}
 
-		Log.Out(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
+		Log(Logs::General, Logs::Netcode, "[ERROR] Convert RoF Slots: Main %i, Sub %i, Aug %i, Unk1 %i to Server Slot %i", rofSlot.Slot, rofSlot.SubIndex, rofSlot.AugIndex, rofSlot.Unknown01, ServerSlot);
 
 		return ServerSlot;
 	}
@@ -6084,5 +6061,33 @@ namespace RoF
 		default: // we shouldn't have any issues with other slots ... just return something
 			return EQEmu::CastingSlot::Discipline;
 		}
+	}
+
+	// these should be optimized out for RoF since they should all boil down to return index :P
+	// but lets leave it here for future proofing
+	static inline int ServerToRoFBuffSlot(int index)
+	{
+		// we're a disc
+		if (index >= EQEmu::constants::LongBuffs + EQEmu::constants::ShortBuffs)
+			return index - EQEmu::constants::LongBuffs - EQEmu::constants::ShortBuffs +
+			       constants::LongBuffs + constants::ShortBuffs;
+		// we're a song
+		if (index >= EQEmu::constants::LongBuffs)
+			return index - EQEmu::constants::LongBuffs + constants::LongBuffs;
+		// we're a normal buff
+		return index; // as long as we guard against bad slots server side, we should be fine
+	}
+
+	static inline int RoFToServerBuffSlot(int index)
+	{
+		// we're a disc
+		if (index >= constants::LongBuffs + constants::ShortBuffs)
+			return index - constants::LongBuffs - constants::ShortBuffs + EQEmu::constants::LongBuffs +
+			       EQEmu::constants::ShortBuffs;
+		// we're a song
+		if (index >= constants::LongBuffs)
+			return index - constants::LongBuffs + EQEmu::constants::LongBuffs;
+		// we're a normal buff
+		return index; // as long as we guard against bad slots server side, we should be fine
 	}
 } /*RoF*/

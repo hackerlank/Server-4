@@ -127,7 +127,7 @@ struct LDoNTrapTemplate
 
 // All clients translate the character select information to some degree
 
-struct CharSelectEquip : EQEmu::Texture_Struct, EQEmu::Tint_Struct {};
+struct CharSelectEquip : EQEmu::textures::Texture_Struct, EQEmu::textures::Tint_Struct {};
 
 // RoF2-based hybrid struct
 struct CharacterSelectEntry_Struct
@@ -142,7 +142,7 @@ struct CharacterSelectEntry_Struct
 	uint16 Instance;
 	uint8 Gender;
 	uint8 Face;
-	CharSelectEquip	Equip[EQEmu::textures::TextureCount];
+	CharSelectEquip	Equip[EQEmu::textures::materialCount];
 	uint8 Unknown15;			// Seen FF
 	uint8 Unknown19;			// Seen FF
 	uint32 DrakkinTattoo;
@@ -305,6 +305,7 @@ union
 	uint8 DestructibleUnk8;
 	uint32 DestructibleUnk9;
 	bool targetable_with_hotkey;
+	bool show_name;
 
 };
 
@@ -550,6 +551,7 @@ struct BlockedBuffs_Struct
 /*86*/ uint16 Flags;
 };
 
+// same for adding
 struct RemoveNimbusEffect_Struct
 {
 /*00*/ uint32 spawnid;			// Spawn ID
@@ -834,7 +836,7 @@ struct SuspendedMinion_Struct
 	/*002*/	uint32 HP;
 	/*006*/	uint32 Mana;
 	/*010*/	SpellBuff_Struct Buffs[BUFF_COUNT];
-	/*510*/	EQEmu::TextureShortProfile Items;
+	/*510*/	EQEmu::TextureMaterialProfile Items;
 	/*546*/	char Name[64];
 	/*610*/
 };
@@ -853,6 +855,7 @@ static const uint32 MAX_PP_REF_SPELLBOOK = 480;	// Set for Player Profile size r
 static const uint32 MAX_PP_REF_MEMSPELL = 9; // Set for Player Profile size retain
 
 static const uint32 MAX_PP_SKILL		= PACKET_SKILL_ARRAY_SIZE;	// 100 - actual skills buffer size
+static const uint32 MAX_PP_INNATE_SKILL	= 25;
 static const uint32 MAX_PP_AA_ARRAY		= 240;
 static const uint32 MAX_GROUP_MEMBERS	= 6;
 static const uint32 MAX_RECAST_TYPES	= 20;
@@ -942,7 +945,7 @@ struct PlayerProfile_Struct
 /*0304*/	uint8				ability_time_minutes;
 /*0305*/	uint8				ability_time_hours;	//place holder
 /*0306*/	uint8				unknown0306[6];		// @bp Spacer/Flag?
-/*0312*/	EQEmu::TextureShortProfile	item_material;	// Item texture/material of worn/held items
+/*0312*/	EQEmu::TextureMaterialProfile	item_material;	// Item texture/material of worn/held items
 /*0348*/	uint8				unknown0348[44];
 /*0392*/	EQEmu::TintProfile	item_tint;
 /*0428*/	AA_Array			aa_array[MAX_PP_AA_ARRAY];
@@ -992,7 +995,8 @@ struct PlayerProfile_Struct
 /*4768*/	int32				platinum_shared;	// Platinum shared between characters
 /*4772*/	uint8				unknown4808[24];
 /*4796*/	uint32				skills[MAX_PP_SKILL];	// [400] List of skills	// 100 dword buffer
-/*5196*/	uint8				unknown5132[184];
+/*5196*/	uint32				InnateSkills[MAX_PP_INNATE_SKILL];
+/*5296*/	uint8				unknown5132[84];
 /*5380*/	uint32				pvp2;				//
 /*5384*/	uint32				unknown5420;		//
 /*5388*/	uint32				pvptype;			//
@@ -1116,6 +1120,11 @@ struct PetCommand_Struct {
 /*004*/ uint32	target;
 };
 
+struct PetCommandState_Struct {
+/*00*/	uint32	button_id;
+/*04*/	uint32	state;
+};
+
 /*
 ** Delete Spawn
 ** Length: 4 Bytes
@@ -1179,7 +1188,7 @@ struct WearChange_Struct{
 /*010*/ uint32 elite_material;	// 1 for Drakkin Elite Material
 /*014*/ uint32 hero_forge_model; // New to VoA
 /*018*/ uint32 unknown18; // New to RoF
-/*022*/ EQEmu::Tint_Struct color;
+/*022*/ EQEmu::textures::Tint_Struct color;
 /*026*/ uint8 wear_slot_id;
 /*027*/
 };
@@ -1643,7 +1652,7 @@ struct LootingItem_Struct {
 /*002*/	uint32	looter;
 /*004*/	uint16	slot_id;
 /*006*/	uint8	unknown3[2];
-/*008*/	uint32	auto_loot;
+/*008*/	int32	auto_loot;
 };
 
 struct GuildManageStatus_Struct{
@@ -1690,6 +1699,7 @@ struct OnLevelMessage_Struct
 	uint32	Duration;
 	uint32	PopupID;
 	uint32	NegativeID;
+	uint32  SoundControls;
 	char	ButtonName0[25];
 	char	ButtonName1[25];
 };
@@ -2071,7 +2081,7 @@ struct AdventureLeaderboard_Struct
 /*struct Item_Shop_Struct {
 	uint16 merchantid;
 	uint8 itemtype;
-	EQEmu::ItemBase item;
+	EQEmu::ItemData item;
 	uint8 iss_unknown001[6];
 };*/
 
@@ -2243,6 +2253,7 @@ struct GroupFollow_Struct { // SoF Follow Struct
 /*0132*/
 };
 
+// this is generic struct
 struct GroupLeaderChange_Struct
 {
 /*000*/		char	Unknown000[64];
@@ -2495,6 +2506,7 @@ struct BookRequest_Struct {
 	uint8 window;	// where to display the text (0xFF means new window)
 	uint8 type;		//type: 0=scroll, 1=book, 2=item info.. prolly others.
 	uint32 invslot;	// Only used in Sof and later clients;
+	int16 subslot; // The subslot inside of a bag if it is inside one.
 	char txtfile[20];
 };
 
@@ -3515,6 +3527,20 @@ struct RecipeAutoCombine_Struct {
 	uint32 reply_code;		// 93 64 e1 00 (junk) in request
 								// 00 00 00 00 in successful reply
 								// f5 ff ff ff in 'you dont have all the stuff' reply
+};
+
+// this is the "value#a" data
+enum EParticlePoint {
+	eDefault,
+	eChest,
+	eHead,
+	eLeftHand,
+	eRigthHand,
+	eLeftFoot,
+	eRightFood,
+	eLeftEye,
+	eRightEye,
+	eMouth
 };
 
 struct LevelAppearance_Struct { //Sends a little graphic on level up
@@ -4741,6 +4767,7 @@ struct BuffIconEntry_Struct
 	uint32 spell_id;
 	int32 tics_remaining;
 	uint32 num_hits;
+	char caster[64];
 };
 
 struct BuffIcon_Struct
@@ -4750,6 +4777,7 @@ struct BuffIcon_Struct
 	uint16 count;
 	uint8 type; // 0 = self buff window, 1 = self target window, 4 = group, 5 = PC, 7 = NPC
 	int32 tic_timer;
+	int32 name_lengths; // so ahh we kind of do these packets hacky, this is the total length of all the names to make creating the real packets in the translators easier
 	BuffIconEntry_Struct entries[0];
 };
 
@@ -5309,6 +5337,24 @@ struct fling_struct {
 /* 24 */ float new_z;
 /* 28 */
 };
+
+// used when action == 0
+struct AuraCreate_Struct {
+/* 00 */	uint32 action; // 0 = add, 1 = delete, 2 = reset
+/* 04 */	uint32 type; // unsure -- normal auras show 1 clicky (ex. Circle of Power) show 0
+/* 08 */	char aura_name[64];
+/* 72 */	uint32 entity_id;
+/* 76 */	uint32 icon;
+/* 80 */
+};
+
+// used when action == 1
+struct AuraDestory_Struct {
+/* 00 */	uint32 action; // 0 = add, 1 = delete, 2 = reset
+/* 04 */	uint32 entity_id;
+/* 08 */
+};
+// I think we can assume it's just action for 2, client doesn't seem to do anything with the rest of the data in that case
 
 // Restore structure packing to default
 #pragma pack()

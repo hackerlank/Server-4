@@ -131,6 +131,7 @@ static const uint32 MAX_PP_LANGUAGE		= 32;	// was 25
 static const uint32 MAX_PP_SPELLBOOK	= 720;	// was 480
 static const uint32 MAX_PP_MEMSPELL		= 16;	// was 12
 static const uint32 MAX_PP_SKILL		= PACKET_SKILL_ARRAY_SIZE;	// 100 - actual skills buffer size
+static const uint32 MAX_PP_INNATE_SKILL	= 25;
 static const uint32 MAX_PP_AA_ARRAY		= 300;
 static const uint32 MAX_PP_DISCIPLINES	= 200;	// was 100
 static const uint32 MAX_GROUP_MEMBERS	= 6;
@@ -190,7 +191,7 @@ struct TintProfile
 			Tint_Struct Primary;
 			Tint_Struct Secondary;
 		};
-		Tint_Struct Slot[EQEmu::textures::TextureCount];
+		Tint_Struct Slot[EQEmu::textures::materialCount];
 	};
 };
 
@@ -339,18 +340,7 @@ struct Spawn_Struct_Bitfields
 /*06*/	unsigned   sneak:1;
 /*08*/	unsigned   lfg:1;
 /*09*/	unsigned   unknown09:1;
-/*10*/	unsigned   invis:1;			// May have invis & sneak the wrong way around ... not sure how to tell which is which
-/*11*/	unsigned   invis1:1;		// GM Invis?  Can only be seen with #gm on - same for the below
-/*12*/	unsigned   invis2:1;		// This one also make the NPC/PC invis
-/*13*/	unsigned   invis3:1;		// This one also make the NPC/PC invis
-/*14*/	unsigned   invis4:1;		// This one also make the NPC/PC invis
-/*15*/	unsigned   invis6:1;		// This one also make the NPC/PC invis
-/*16*/	unsigned   invis7:1;		// This one also make the NPC/PC invis
-/*17*/	unsigned   invis8:1;		// This one also make the NPC/PC invis
-/*18*/	unsigned   invis9:1;		// This one also make the NPC/PC invis
-/*19*/	unsigned   invis10:1;		// This one also make the NPC/PC invis
-/*20*/	unsigned   invis11:1;		// This one also make the NPC/PC invis
-/*21*/	unsigned   invis12:1;		// This one also make the NPC/PC invis
+/*10*/	unsigned   invis:12;		// there are 3000 different (non-GM) invis levels
 /*22*/	unsigned   linkdead:1;		// 1 Toggles LD on or off after name. Correct for RoF
 /*23*/	unsigned   showhelm:1;
 /*24*/	unsigned   unknown24:1;		// Prefixes name with !
@@ -1107,8 +1097,8 @@ union
 /*01012*/ AA_Array  aa_array[MAX_PP_AA_ARRAY];	// [300] 3600 bytes - AAs 12 bytes each
 /*04612*/ uint32 skill_count;					// Seen 100
 /*04616*/ uint32 skills[MAX_PP_SKILL];			// [100] 400 bytes - List of skills
-/*05016*/ uint32 unknown15_count;				// Seen 25
-/*05020*/ uint32 unknown_rof15[25];				// Most are 255 or 0
+/*05016*/ uint32 InnateSkills_count;				// Seen 25
+/*05020*/ uint32 InnateSkills[MAX_PP_INNATE_SKILL];	// Most are 255 or 0
 /*05120*/ uint32 discipline_count;				// Seen 200
 /*05124*/ Disciplines_Struct  disciplines;		// [200] 800 bytes Known disciplines
 /*05924*/ uint32 timestamp_count;				// Seen 20
@@ -2021,7 +2011,7 @@ struct LootingItem_Struct {
 /*004*/	uint32	looter;
 /*008*/	uint16	slot_id;
 /*010*/	uint16	unknown10;
-/*012*/	uint32	auto_loot;
+/*012*/	int32	auto_loot;
 /*016*/	uint32	unknown16;
 /*020*/
 };
@@ -2122,7 +2112,7 @@ struct OnLevelMessage_Struct {
 /*0000*/	uint32  ButtonName1_Count;
 /*0000*/	char	ButtonName1[25];
 /*0000*/	uint8	Buttons;
-/*0000*/	uint8	Unknown4275;	// Something to do with audio controls
+/*0000*/	uint8	SoundControls;	// Something to do with audio controls
 /*0000*/	uint32  Duration;
 /*0000*/	uint32  PopupID;	// If none zero, a response packet with 00 00 00 00 <PopupID> is returned on clicking the left button
 /*0000*/	uint32  NegativeID;	// If none zero, a response packet with 01 00 00 00 <NegativeID> is returned on clicking the right button
@@ -2450,7 +2440,7 @@ struct AdventureLeaderboard_Struct
 /*struct Item_Shop_Struct {
 	uint16 merchantid;
 	uint8 itemtype;
-	ItemBase item;
+	ItemData item;
 	uint8 iss_unknown001[6];
 };*/
 

@@ -52,6 +52,25 @@ struct EnterWorld_Struct {
 struct WorldObjectsSent_Struct {
 };
 
+// yep, even SoF had a version of the new inventory system, used by OP_MoveMultipleItems
+struct InventorySlot_Struct
+{
+/*000*/	int32	Type;		// Worn and Normal inventory = 0, Bank = 1, Shared Bank = 2, Trade = 3, World = 4, Limbo = 5
+/*004*/	int32	Slot;
+/*008*/	int32	SubIndex;
+/*012*/	int32	AugIndex;
+/*016*/	int32	Unknown01;
+};
+
+// unsure if they have a version of this, completeness though
+struct TypelessInventorySlot_Struct
+{
+/*000*/	int32	Slot;
+/*004*/	int32	SubIndex;
+/*008*/	int32	AugIndex;
+/*012*/	int32	Unknown01;
+};
+
 /* Name Approval Struct */
 /* Len: */
 /* Opcode: 0x8B20*/
@@ -149,7 +168,7 @@ struct TintProfile
 			Tint_Struct Primary;
 			Tint_Struct Secondary;
 		};
-		Tint_Struct Slot[EQEmu::textures::TextureCount];
+		Tint_Struct Slot[EQEmu::textures::materialCount];
 	};
 };
 
@@ -178,7 +197,7 @@ struct TextureProfile
 			Texture_Struct Primary;
 			Texture_Struct Secondary;
 		};
-		Texture_Struct Slot[EQEmu::textures::TextureCount];
+		Texture_Struct Slot[EQEmu::textures::materialCount];
 	};
 
 	TextureProfile();
@@ -195,7 +214,7 @@ struct CharacterSelectEntry_Struct
 /*0000*/	uint8 Beard;				//
 /*0001*/	uint8 HairColor;			//
 /*0000*/	uint8 Face;					//
-/*0000*/	CharSelectEquip	Equip[EQEmu::textures::TextureCount];
+/*0000*/	CharSelectEquip	Equip[EQEmu::textures::materialCount];
 /*0000*/	uint32 PrimaryIDFile;		//
 /*0000*/	uint32 SecondaryIDFile;		//
 /*0000*/	uint8 Unknown15;			// 0xff
@@ -799,6 +818,7 @@ static const uint32 MAX_PP_LANGUAGE		= 25; //
 static const uint32 MAX_PP_SPELLBOOK	= 480; // Confirmed 60 pages on Live now
 static const uint32 MAX_PP_MEMSPELL		= 10; //was 9 now 10 on Live
 static const uint32 MAX_PP_SKILL		= PACKET_SKILL_ARRAY_SIZE;	// 100 - actual skills buffer size
+static const uint32 MAX_PP_INNATE_SKILL	= 25;
 static const uint32 MAX_PP_AA_ARRAY		= 300; //was 299
 static const uint32 MAX_GROUP_MEMBERS	= 6;
 static const uint32 MAX_RECAST_TYPES	= 20;
@@ -903,7 +923,8 @@ struct PlayerProfile_Struct //23576 Octets
 /*06488*/ uint32  silver_cursor;		// Silver Pieces on cursor
 /*06492*/ uint32  copper_cursor;		// Copper Pieces on cursor
 /*06496*/ uint32  skills[MAX_PP_SKILL];	// [400] List of skills // 100 dword buffer
-/*06896*/ uint8 unknown04760[136];
+/*06896*/ uint32  InnateSkills[MAX_PP_INNATE_SKILL];
+/*06996*/ uint8  unknown04760[36];
 /*07032*/ uint32  toxicity;				// Potion Toxicity (15=too toxic, each potion adds 3)
 /*07036*/ uint32  thirst_level;			// Drink (ticks till next drink)
 /*07040*/ uint32  hunger_level;			// Food (ticks till next eat)
@@ -1555,6 +1576,19 @@ struct MoveItem_Struct
 /*0012*/
 };
 
+struct MultiMoveItemSub_Struct
+{
+/*0000*/ InventorySlot_Struct	from_slot;
+/*0020*/ uint32 number_in_stack; // so the amount we are moving from the source
+/*0024*/ InventorySlot_Struct	to_slot;
+};
+
+struct MultiMoveItem_Struct
+{
+/*0000*/ uint32	count;
+/*0004*/ MultiMoveItemSub_Struct moves[0];
+};
+
 //
 // from_slot/to_slot
 // -1 - destroy
@@ -1648,7 +1682,7 @@ struct LootingItem_Struct {
 /*002*/	uint32	looter;
 /*004*/	uint16	slot_id;
 /*006*/	uint8	unknown3[2];
-/*008*/	uint32	auto_loot;
+/*008*/	int32	auto_loot;
 };
 
 struct GuildManageStatus_Struct{
@@ -3726,6 +3760,11 @@ struct MobHealth_Struct {
 struct AnnoyingZoneUnknown_Struct {
 	uint32	entity_id;
 	uint32	value;		//always 4
+};
+
+struct LoadSpellSet_Struct {
+	uint32 spell[MAX_PP_MEMSPELL];
+	uint32 unknown;
 };
 
 struct BlockedBuffs_Struct {
